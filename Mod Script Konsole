@@ -1,0 +1,646 @@
+// Trusted Types Policy erstellen, um innerHTML-Zuweisungen zu erlauben
+if (window.trustedTypes && window.trustedTypes.createPolicy) {
+  try {
+    window.trustedTypes.createPolicy('default', {
+      createHTML: (string) => string
+    });
+  } catch (e) {
+    console.warn('Trusted Types Policy existiert bereits oder konnte nicht erstellt werden:', e);
+  }
+}
+(() => {
+  'use strict';
+  if (window.__ytiLoaded) { console.warn('[YT+] läuft bereits.'); return; }
+  window.__ytiLoaded = true;
+
+  // ================== STATE ==================
+  const LS_KEY = 'yti-state-v2';
+  const DEFAULTS = {
+    // Wiedergabe
+    autoHD: false, loopVideo: false, speed: 1.0,
+    volumeBoost: false, boostGain: 2.0,
+    skipAds: false, hideEndscreen: false, hideCards: false,
+    // Feed
+    hideShorts: false, hideAds: false, hideWatched: false,
+    hideRecs: false, hideComments: false, hideMasthead: false,
+    // Aussehen
+    amoled: false, wideTheater: false, compactGrid: false, hideScrollBar: false,
+  };
+
+  const state = Object.assign({}, DEFAULTS);
+  try { Object.assign(state, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (e) {}
+  const save = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {} };
+
+  // ================== STYLES ==================
+  const styleEl = document.createElement('style');
+  styleEl.textContent = `
+    /* Shorts */
+    body.yti-hideShorts ytd-rich-shelf-renderer[is-shorts],
+    body.yti-hideShorts ytd-reel-shelf-renderer,
+    body.yti-hideShorts ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
+    body.yti-hideShorts ytd-rich-item-renderer:has(a[href^="/shorts/"]),
+    body.yti-hideShorts ytd-guide-entry-renderer a[title="Shorts"],
+    body.yti-hideShorts ytd-mini-guide-entry-renderer a[title="Shorts"] { display:none !important; }
+
+    /* Ads */
+    body.yti-hideAds ytd-ad-slot-renderer,
+    body.yti-hideAds ytd-in-feed-ad-layout-renderer,
+    body.yti-hideAds ytd-promoted-sparkles-web-renderer,
+    body.yti-hideAds ytd-display-ad-renderer,
+    body.yti-hideAds #masthead-ad,
+    body.yti-hideAds ytd-banner-promo-renderer,
+    body.yti-hideAds .ytp-ad-overlay-slot,
+    body.yti-hideAds ytd-companion-slot-renderer,
+    body.yti-hideAds ytd-action-companion-ad-renderer { display:none !important; }
+
+    /* Empfehlungen */
+    body.yti-hideRecs #secondary { display:none !important; }
+    body.yti-hideRecs ytd-watch-flexy #primary { max-width:100% !important; }
+
+    /* Kommentare */
+    body.yti-hideComments #comments,
+    body.yti-hideComments ytd-comments { display:none !important; }
+
+    /* Masthead verstecken */
+    body.yti-hideMasthead #masthead-container { transform:translateY(-100%) !important; transition:transform .25s !important; }
+
+    /* Endscreen / Cards */
+    body.yti-hideEndscreen .ytp-endscreen-content,
+    body.yti-hideEndscreen .ytp-ce-element { display:none !important; }
+    body.yti-hideCards .ytp-cards-teaser,
+    body.yti-hideCards .ytp-cards-button { display:none !important; }
+
+    /* AMOLED */
+    body.yti-amoled,
+    body.yti-amoled ytd-app,
+    body.yti-amoled ytd-masthead,
+    body.yti-amoled #background,
+    body.yti-amoled ytd-watch-flexy,
+    body.yti-amoled ytd-browse,
+    body.yti-amoled #content,
+    body.yti-amoled #primary,
+    body.yti-amoled ytd-rich-grid-renderer,
+    body.yti-amoled ytd-two-column-browse-results-renderer,
+    body.yti-amoled ytd-watch-metadata,
+    body.yti-amoled #related,
+    body.yti-amoled ytd-compact-video-renderer,
+    body.yti-amoled tp-yt-app-drawer,
+    body.yti-amoled #guide-content { background-color:#000 !important; }
+    body.yti-amoled #movie_player { background:#000 !important; }
+
+    /* Breiter Kinomodus */
+    body.yti-wideTheater ytd-watch-flexy[theater] #player-theater-container { max-height:92vh !important; }
+
+    /* Scrollbar */
+    body.yti-hideScrollBar ::-webkit-scrollbar { width:0 !important; height:0 !important; }
+    body.yti-hideScrollBar { scrollbar-width:none !important; }
+
+    /* Kompaktes Grid */
+    body.yti-compactGrid ytd-rich-grid-renderer { --ytd-rich-grid-item-margin:8px !important; }
+
+    /* Bereits gesehen dimmen */
+    body.yti-hideWatched ytd-rich-item-renderer:has(ytd-thumbnail-overlay-resume-playback-renderer) {
+      opacity:.35 !important; filter:grayscale(.5) !important;
+    }
+    body.yti-hideWatched ytd-rich-item-renderer:has(ytd-thumbnail-overlay-resume-playback-renderer):hover {
+      opacity:.9 !important; filter:none !important;
+    }
+
+    /* ============ MOD MENU ============ */
+    #yti-btn {
+      position:fixed; bottom:20px; right:20px;
+      width:52px; height:52px; border-radius:50%;
+      background:linear-gradient(135deg,#ff0033,#c1001f);
+      color:#fff; border:none; font-size:22px; font-weight:bold;
+      cursor:pointer; box-shadow:0 4px 20px rgba(255,0,51,.5);
+      z-index:2147483646; transition:transform .15s, box-shadow .15s;
+      display:flex; align-items:center; justify-content:center;
+    }
+    #yti-btn:hover { transform:scale(1.08); box-shadow:0 6px 26px rgba(255,0,51,.7); }
+
+    #yti-panel {
+      position:fixed; bottom:84px; right:20px;
+      width:330px; max-height:80vh;
+      background:#181818; color:#f1f1f1;
+      border:1px solid #303030; border-radius:14px;
+      box-shadow:0 12px 40px rgba(0,0,0,.6);
+      font-family:Roboto,Arial,sans-serif; font-size:13px;
+      z-index:2147483647; display:none; flex-direction:column; overflow:hidden;
+      animation:ytiIn .18s ease-out;
+    }
+    @keyframes ytiIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    #yti-panel.yti-open { display:flex; }
+
+    #yti-panel .yti-head {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:12px 14px; border-bottom:1px solid #303030; background:#212121;
+    }
+    #yti-panel .yti-head h2 { margin:0; font-size:15px; font-weight:600; color:#fff; }
+    #yti-panel .yti-head h2 span { color:#ff0033; }
+    #yti-panel .yti-head button {
+      background:transparent; border:none; color:#aaa; cursor:pointer;
+      font-size:16px; padding:2px 8px; border-radius:6px;
+    }
+    #yti-panel .yti-head button:hover { background:#303030; color:#fff; }
+
+    #yti-panel .yti-tabs { display:flex; border-bottom:1px solid #303030; background:#1e1e1e; }
+    #yti-panel .yti-tab {
+      flex:1; padding:10px 4px; text-align:center;
+      cursor:pointer; color:#aaa; font-size:11px; font-weight:500;
+      border-bottom:2px solid transparent; transition:all .12s; user-select:none;
+    }
+    #yti-panel .yti-tab:hover { color:#fff; background:#252525; }
+    #yti-panel .yti-tab.yti-active { color:#ff0033; border-bottom-color:#ff0033; }
+
+    #yti-panel .yti-body { padding:6px 6px 14px; overflow-y:auto; flex:1; }
+    #yti-panel .yti-body::-webkit-scrollbar { width:8px; }
+    #yti-panel .yti-body::-webkit-scrollbar-thumb { background:#444; border-radius:4px; }
+
+    #yti-panel .yti-cat { display:none; }
+    #yti-panel .yti-cat.yti-active { display:block; }
+
+    #yti-panel .yti-section-title {
+      padding:12px 14px 4px; font-size:10.5px; font-weight:600;
+      letter-spacing:.7px; color:#888; text-transform:uppercase;
+    }
+
+    #yti-panel .yti-row {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:9px 12px; border-radius:8px; cursor:pointer; user-select:none;
+      transition:background .1s;
+    }
+    #yti-panel .yti-row:hover { background:#242424; }
+    #yti-panel .yti-label { display:flex; flex-direction:column; gap:2px; padding-right:8px; }
+    #yti-panel .yti-label small { color:#888; font-size:11px; }
+
+    #yti-panel .yti-switch {
+      position:relative; width:36px; height:20px; background:#444;
+      border-radius:10px; transition:background .2s; flex-shrink:0;
+    }
+    #yti-panel .yti-switch::after {
+      content:''; position:absolute; top:2px; left:2px;
+      width:16px; height:16px; border-radius:50%;
+      background:#fff; transition:transform .2s;
+    }
+    #yti-panel .yti-row.yti-on .yti-switch { background:#ff0033; }
+    #yti-panel .yti-row.yti-on .yti-switch::after { transform:translateX(16px); }
+
+    #yti-panel .yti-slider-row { padding:8px 12px; }
+    #yti-panel .yti-slider-head {
+      display:flex; justify-content:space-between; margin-bottom:6px;
+      font-size:12px; color:#ddd;
+    }
+    #yti-panel .yti-slider-head b { color:#ff0033; }
+    #yti-panel .yti-slider-row input[type="range"] {
+      width:100%; accent-color:#ff0033; cursor:pointer;
+    }
+
+    #yti-panel .yti-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:6px 8px; }
+    #yti-panel .yti-action-btn {
+      background:#2a2a2a; color:#f1f1f1; border:1px solid #383838;
+      border-radius:8px; padding:10px 6px; cursor:pointer;
+      font-size:11.5px; font-family:inherit;
+      transition:all .12s; display:flex; flex-direction:column;
+      align-items:center; gap:4px;
+    }
+    #yti-panel .yti-action-btn:hover {
+      background:#ff0033; border-color:#ff0033; color:#fff;
+      transform:translateY(-1px);
+    }
+    #yti-panel .yti-action-btn .yti-ico { font-size:18px; line-height:1; }
+
+    .yti-toast {
+      position:fixed; bottom:100px; left:50%;
+      transform:translateX(-50%) translateY(10px);
+      background:#222; color:#fff; padding:10px 18px; border-radius:8px;
+      font-family:Roboto,Arial,sans-serif; font-size:13px;
+      box-shadow:0 4px 16px rgba(0,0,0,.5);
+      z-index:2147483647; opacity:0; pointer-events:none;
+      transition:opacity .25s, transform .25s;
+      border-left:3px solid #ff0033; max-width:80vw;
+    }
+    .yti-toast.yti-show { opacity:1; transform:translateX(-50%) translateY(0); }
+  `;
+  document.head.appendChild(styleEl);
+
+  // ================== HELPERS ==================
+  const getVideo = () => document.querySelector('video');
+  const getPlayer = () => document.getElementById('movie_player');
+
+  function toast(msg) {
+    let el = document.querySelector('.yti-toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'yti-toast';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.classList.add('yti-show');
+    clearTimeout(el.__t);
+    el.__t = setTimeout(() => el.classList.remove('yti-show'), 2200);
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else fallbackCopy(text);
+  }
+  function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+  }
+
+  function getVideoTitle() {
+    const el = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, #title h1');
+    return el ? el.textContent.trim() : 'video';
+  }
+
+  function formatTime(s) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+    return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+  }
+
+  // ================== FEATURES ==================
+  function applySpeed() {
+    const v = getVideo();
+    if (v && Math.abs(v.playbackRate - state.speed) > 0.01) v.playbackRate = state.speed;
+  }
+  function applyLoop() {
+    const v = getVideo();
+    if (v) v.loop = !!state.loopVideo;
+  }
+  function applyAutoHD() {
+    if (!state.autoHD) return;
+    const p = getPlayer();
+    if (p && p.getAvailableQualityLevels) {
+      const list = p.getAvailableQualityLevels();
+      if (list && list.length) {
+        try { p.setPlaybackQualityRange(list[0], list[0]); } catch (e) {}
+      }
+    }
+  }
+
+  // Volume Boost
+  let audioCtx = null, gainNode = null, boundVideo = null;
+  function applyVolumeBoost() {
+    const v = getVideo();
+    if (!v) return;
+    if (boundVideo !== v) {
+      if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; gainNode = null; }
+      boundVideo = v;
+    }
+    if (state.volumeBoost) {
+      if (!gainNode) {
+        try {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const src = audioCtx.createMediaElementSource(v);
+          gainNode = audioCtx.createGain();
+          src.connect(gainNode); gainNode.connect(audioCtx.destination);
+        } catch (e) {
+          console.warn('[YT+] Volume-Boost fehlgeschlagen:', e);
+          toast('⚠ Boost nicht möglich'); return;
+        }
+      }
+      if (gainNode) gainNode.gain.value = state.boostGain;
+    } else if (gainNode) {
+      gainNode.gain.value = 1.0;
+    }
+  }
+
+  // Ad Skipper
+  function trySkipAd() {
+    if (!state.skipAds) return;
+    const sel = '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-ad-overlay-close-button';
+    document.querySelectorAll(sel).forEach(b => {
+      if (b.offsetParent !== null) b.click();
+    });
+  }
+
+  // Screenshot
+  function takeScreenshot() {
+    const v = getVideo();
+    if (!v) return toast('❌ Kein Video');
+    try {
+      const c = document.createElement('canvas');
+      c.width = v.videoWidth; c.height = v.videoHeight;
+      c.getContext('2d').drawImage(v, 0, 0);
+      c.toBlob(b => {
+        const u = URL.createObjectURL(b);
+        const a = document.createElement('a');
+        a.href = u;
+        a.download = `yt-${Date.now()}.png`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(u), 4000);
+        toast('📸 Screenshot gespeichert');
+      }, 'image/png');
+    } catch (e) { toast('❌ Fehlgeschlagen'); console.warn(e); }
+  }
+
+  // Thumbnail
+  function downloadThumbnail() {
+    const id = new URL(location.href).searchParams.get('v');
+    if (!id) return toast('❌ Kein Video');
+    const qs = ['maxresdefault', 'sddefault', 'hqdefault'];
+    let i = 0;
+    const next = () => {
+      if (i >= qs.length) return toast('❌ Nicht gefunden');
+      const q = qs[i++];
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        if (img.naturalWidth < 100) return next();
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        c.toBlob(b => {
+          const u = URL.createObjectURL(b);
+          const a = document.createElement('a');
+          a.href = u; a.download = `yt-thumb-${id}-${q}.jpg`; a.click();
+          setTimeout(() => URL.revokeObjectURL(u), 4000);
+          toast('🖼 Thumbnail gespeichert');
+        });
+      };
+      img.onerror = next;
+      img.src = `https://i.ytimg.com/vi/${id}/${q}.jpg`;
+    };
+    next();
+  }
+
+  // Clean URL
+  function copyCleanUrl() {
+    const u = new URL(location.href);
+    const id = u.searchParams.get('v');
+    if (!id) { copyText(location.href); return toast('🔗 URL kopiert'); }
+    const t = u.searchParams.get('t');
+    copyText(`https://youtu.be/${id}${t ? '?t=' + t : ''}`);
+    toast('🔗 Sauberer Link kopiert');
+  }
+
+  // Video Info
+  function copyVideoInfo() {
+    const u = new URL(location.href);
+    const id = u.searchParams.get('v');
+    const title = getVideoTitle();
+    const ch = document.querySelector('#owner #channel-name a, ytd-channel-name a')?.textContent.trim() || '?';
+    const v = getVideo();
+    const time = v ? formatTime(v.currentTime) : '0:00';
+    copyText(`${title}\nKanal: ${ch}\nZeit: ${time}\nhttps://youtu.be/${id}`);
+    toast('📋 Video-Info kopiert');
+  }
+
+  // Fullscreen / Theater / PiP
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.();
+  }
+  function toggleTheater() { getPlayer()?.toggleFullscreen?.(); }
+  async function togglePiP() {
+    const v = getVideo(); if (!v) return;
+    try {
+      if (document.pictureInPictureElement) await document.exitFromPictureInPicture?.() || await document.exitPictureInPicture();
+      else await v.requestPictureInPicture();
+    } catch (e) { toast('❌ PiP nicht verfügbar'); }
+  }
+
+  // Toggle a feature
+  function setState(key, val) {
+    state[key] = val;
+    save();
+    if (typeof val === 'boolean') document.body.classList.toggle('yti-' + key, val);
+    if (key === 'speed') applySpeed();
+    if (key === 'loopVideo') applyLoop();
+    if (key === 'volumeBoost' || key === 'boostGain') applyVolumeBoost();
+    if (key === 'autoHD') applyAutoHD();
+    syncToggleUI(key);
+  }
+
+  function syncToggleUI(key) {
+    const row = panel.querySelector(`.yti-row[data-key="${key}"]`);
+    if (row) row.classList.toggle('yti-on', !!state[key]);
+  }
+
+  // ================== BUILD UI ==================
+  const btn = document.createElement('button');
+  btn.id = 'yti-btn'; btn.title = 'YouTube+ Mod Menu'; btn.textContent = '⚙';
+
+  const panel = document.createElement('div');
+  panel.id = 'yti-panel';
+
+  // Header
+  const head = document.createElement('div');
+  head.className = 'yti-head';
+  const h2 = document.createElement('h2');
+  h2.appendChild(document.createTextNode('YouTube'));
+  const plus = document.createElement('span'); plus.textContent = '+';
+  h2.appendChild(plus);
+  h2.appendChild(document.createTextNode(' Mod'));
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕'; closeBtn.title = 'Schließen';
+  head.appendChild(h2); head.appendChild(closeBtn);
+  panel.appendChild(head);
+
+  // Tabs
+  const tabsBar = document.createElement('div');
+  tabsBar.className = 'yti-tabs';
+  const TABS = [['playback','▶'],['feed','🏠'],['look','🎨'],['tools','🛠']];
+  const tabEls = {};
+  TABS.forEach(([id, ico]) => {
+    const t = document.createElement('div');
+    t.className = 'yti-tab'; t.dataset.tab = id;
+    t.textContent = ico; t.title = id;
+    tabsBar.appendChild(t); tabEls[id] = t;
+  });
+  panel.appendChild(tabsBar);
+
+  // Body & Categories
+  const body = document.createElement('div');
+  body.className = 'yti-body';
+  const cats = {};
+  TABS.forEach(([id]) => {
+    const c = document.createElement('div');
+    c.className = 'yti-cat'; c.dataset.cat = id;
+    body.appendChild(c); cats[id] = c;
+  });
+  panel.appendChild(body);
+
+  // --- Builders ---
+  function sectionTitle(parent, text) {
+    const t = document.createElement('div');
+    t.className = 'yti-section-title'; t.textContent = text;
+    parent.appendChild(t);
+  }
+  function toggleRow(parent, key, label, sub) {
+    const row = document.createElement('div');
+    row.className = 'yti-row'; row.dataset.key = key;
+    if (state[key]) row.classList.add('yti-on');
+    const lbl = document.createElement('div');
+    lbl.className = 'yti-label';
+    const s = document.createElement('span'); s.textContent = label;
+    lbl.appendChild(s);
+    if (sub) { const sm = document.createElement('small'); sm.textContent = sub; lbl.appendChild(sm); }
+    const sw = document.createElement('div'); sw.className = 'yti-switch';
+    row.appendChild(lbl); row.appendChild(sw);
+    row.addEventListener('click', () => setState(key, !state[key]));
+    parent.appendChild(row);
+  }
+  function sliderRow(parent, key, label, min, max, step, fmt) {
+    const wrap = document.createElement('div');
+    wrap.className = 'yti-slider-row';
+    const h = document.createElement('div');
+    h.className = 'yti-slider-head';
+    const l = document.createElement('span'); l.textContent = label;
+    const v = document.createElement('b'); v.textContent = fmt(state[key]);
+    h.appendChild(l); h.appendChild(v); wrap.appendChild(h);
+    const inp = document.createElement('input');
+    inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step;
+    inp.value = state[key];
+    inp.addEventListener('input', () => {
+      const nv = parseFloat(inp.value);
+      setState(key, nv);
+      v.textContent = fmt(nv);
+    });
+    wrap.appendChild(inp); parent.appendChild(wrap);
+  }
+  function actionGrid(parent, actions) {
+    const g = document.createElement('div');
+    g.className = 'yti-actions';
+    actions.forEach(({ icon, label, handler }) => {
+      const b = document.createElement('button');
+      b.className = 'yti-action-btn';
+      const ic = document.createElement('span'); ic.className = 'yti-ico'; ic.textContent = icon;
+      const lb = document.createElement('span'); lb.textContent = label;
+      b.appendChild(ic); b.appendChild(lb);
+      b.addEventListener('click', handler);
+      g.appendChild(b);
+    });
+    parent.appendChild(g);
+  }
+
+  // --- Wiedergabe ---
+  sectionTitle(cats.playback, 'Qualität & Tempo');
+  toggleRow(cats.playback, 'autoHD', 'Auto HD', 'Immer höchste Qualität');
+  sliderRow(cats.playback, 'speed', 'Geschwindigkeit', 0.25, 4, 0.25, v => v.toFixed(2) + 'x');
+  toggleRow(cats.playback, 'loopVideo', 'Video loopen', 'Endlos wiederholen');
+
+  sectionTitle(cats.playback, 'Störungen filtern');
+  toggleRow(cats.playback, 'skipAds', 'Werbung überspringen', 'Klickt „Skip"-Button automatisch');
+  toggleRow(cats.playback, 'hideEndscreen', 'Endscreen ausblenden', 'Empfehlungen am Videoende');
+  toggleRow(cats.playback, 'hideCards', 'Infokarten ausblenden', 'Teaser & Info-Karten');
+
+  sectionTitle(cats.playback, 'Sound');
+  toggleRow(cats.playback, 'volumeBoost', 'Lautstärke-Boost', 'Über 100 % hinaus');
+  sliderRow(cats.playback, 'boostGain', 'Verstärkung', 1, 5, 0.5, v => v.toFixed(1) + 'x');
+
+  // --- Feed ---
+  sectionTitle(cats.feed, 'Inhalte filtern');
+  toggleRow(cats.feed, 'hideShorts', 'Shorts ausblenden', 'Feed, Suche & Sidebar');
+  toggleRow(cats.feed, 'hideAds', 'Werbung ausblenden', 'Werbe-Slots im Feed');
+  toggleRow(cats.feed, 'hideWatched', 'Gesehene dimmen', 'Bereits angesehene Videos');
+  sectionTitle(cats.feed, 'Seitenbereiche');
+  toggleRow(cats.feed, 'hideRecs', 'Empfehlungen ausblenden', 'Rechte Spalte auf Watch-Seite');
+  toggleRow(cats.feed, 'hideComments', 'Kommentare ausblenden', 'Kompletter Kommentarbereich');
+  toggleRow(cats.feed, 'hideMasthead', 'Kopfzeile verstecken', 'Fährt oben hoch');
+
+  // --- Aussehen ---
+  sectionTitle(cats.look, 'Farben & Layout');
+  toggleRow(cats.look, 'amoled', 'AMOLED-Schwarz', 'Tiefes Schwarz, spart Strom');
+  toggleRow(cats.look, 'wideTheater', 'Breiter Kinomodus', 'Mehr Höhe im Theatermodus');
+  toggleRow(cats.look, 'compactGrid', 'Kompaktes Grid', 'Engere Video-Abstände');
+  toggleRow(cats.look, 'hideScrollBar', 'Scrollbar verstecken', 'Ohne Scrollbalken');
+
+  // --- Tools ---
+  sectionTitle(cats.tools, 'Schnellaktionen');
+  actionGrid(cats.tools, [
+    { icon: '📸', label: 'Screenshot',   handler: takeScreenshot },
+    { icon: '🖼', label: 'Thumbnail',    handler: downloadThumbnail },
+    { icon: '🔗', label: 'Sauberer Link', handler: copyCleanUrl },
+    { icon: '📋', label: 'Video-Info',   handler: copyVideoInfo },
+    { icon: '🖥', label: 'Vollbild',      handler: toggleFullscreen },
+    { icon: '🎬', label: 'Kino-Modus',   handler: toggleTheater },
+    { icon: '📺', label: 'Bild-in-Bild', handler: togglePiP },
+    { icon: '↩', label: 'Reset',        handler: () => {
+      if (!confirm('Alle Einstellungen zurücksetzen?')) return;
+      try { localStorage.removeItem(LS_KEY); } catch (e) {}
+      location.reload();
+    }},
+  ]);
+  sectionTitle(cats.tools, 'Hotkeys');
+  actionGrid(cats.tools, [
+    { icon: '⌨', label: 'Alt+K Panel',   handler: () => toast('Alt+K = Menü öffnen/schließen') },
+    { icon: '⌨', label: 'Alt+S Shorts',  handler: () => toast('Alt+S = Shorts ein/aus') },
+    { icon: '⌨', label: 'Alt+W Ads',     handler: () => toast('Alt+W = Werbung ein/aus') },
+    { icon: '⌨', label: 'Alt+D AMOLED',  handler: () => toast('Alt+D = AMOLED ein/aus') },
+    { icon: '⌨', label: 'Alt+P PiP',     handler: () => toast('Alt+P = Bild-in-Bild') },
+  ]);
+
+  // Tabs wechseln
+  let activeTab = 'playback';
+  function switchTab(id) {
+    activeTab = id;
+    Object.entries(tabEls).forEach(([k, el]) => el.classList.toggle('yti-active', k === id));
+    Object.entries(cats).forEach(([k, el]) => el.classList.toggle('yti-active', k === id));
+  }
+  Object.entries(tabEls).forEach(([k, el]) => el.addEventListener('click', () => switchTab(k)));
+  switchTab('playback');
+
+  // Open / Close
+  const openPanel = () => panel.classList.add('yti-open');
+  const closePanel = () => panel.classList.remove('yti-open');
+  btn.addEventListener('click', () => panel.classList.contains('yti-open') ? closePanel() : openPanel());
+  closeBtn.addEventListener('click', closePanel);
+
+  // ================== MOUNT & RUN ==================
+  document.body.appendChild(btn);
+  document.body.appendChild(panel);
+
+  // Klassen anwenden
+  for (const [k, v] of Object.entries(state)) {
+    if (typeof v === 'boolean') document.body.classList.toggle('yti-' + k, v);
+  }
+  applySpeed(); applyLoop(); applyAutoHD();
+
+  // Wiederkehrende Checks
+  setInterval(() => {
+    if (state.skipAds) trySkipAd();
+    if (state.autoHD) applyAutoHD();
+    if (state.loopVideo) applyLoop();
+    if (getVideo() && Math.abs(getVideo().playbackRate - state.speed) > 0.01) applySpeed();
+  }, 1500);
+
+  // SPA-Navigation
+  document.addEventListener('yt-navigate-finish', () => {
+    setTimeout(() => {
+      for (const [k, v] of Object.entries(state)) {
+        if (typeof v === 'boolean') document.body.classList.toggle('yti-' + k, v);
+      }
+      boundVideo = null; gainNode = null;
+      if (state.volumeBoost) applyVolumeBoost();
+      applyAutoHD(); applyLoop(); applySpeed();
+    }, 500);
+  });
+
+  // Video geladen
+  document.addEventListener('loadeddata', e => {
+    if (e.target.tagName === 'VIDEO') {
+      if (state.loopVideo) e.target.loop = true;
+      if (state.speed !== 1.0) e.target.playbackRate = state.speed;
+    }
+  }, true);
+
+  // Hotkeys
+  document.addEventListener('keydown', e => {
+    if (e.target.matches('input, textarea, [contenteditable]')) return;
+    if (!e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 'k') { e.preventDefault(); panel.classList.contains('yti-open') ? closePanel() : openPanel(); }
+    else if (k === 's') { setState('hideShorts', !state.hideShorts); toast(state.hideShorts ? '✅ Shorts aus' : '❌ Shorts an'); }
+    else if (k === 'w') { setState('hideAds', !state.hideAds);       toast(state.hideAds ? '✅ Ads aus' : '❌ Ads an'); }
+    else if (k === 'd') { setState('amoled', !state.amoled);         toast(state.amoled ? '🌑 AMOLED an' : '☀ aus'); }
+    else if (k === 'p') { e.preventDefault(); togglePiP(); }
+  });
+
+  console.log('%c⚙ YouTube+ Mod v2 geladen', 'color:#ff0033;font-weight:bold;font-size:14px');
+  console.log('%c⚙ Button unten rechts · Alt+K = Menü · Alt+S/W/D/P = Hotkeys', 'color:#888');
+})();
